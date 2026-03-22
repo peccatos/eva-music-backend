@@ -1,1 +1,0 @@
-C:\dev\eva-music-backend\target\debug\eva-music-backend.exe: C:\dev\eva-music-backend\schema.sql C:\dev\eva-music-backend\src\app.rs C:\dev\eva-music-backend\src\db\mod.rs C:\dev\eva-music-backend\src\db\repo.rs C:\dev\eva-music-backend\src\main.rs C:\dev\eva-music-backend\src\telegram\mod.rs C:\dev\eva-music-backend\src\telegram\webhook.rs

@@ -237,6 +237,21 @@ body.is-playing .hero__art {
   accent-color: #a28f7a;
 }
 
+.notice {
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(91, 70, 49, 0.18);
+  background: linear-gradient(180deg, rgba(255, 247, 232, 0.98), rgba(244, 237, 226, 0.98));
+  color: #5b4631;
+  box-shadow: 0 12px 28px rgba(55, 39, 20, 0.08);
+}
+
+.notice p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .userbar {
   display: grid;
   grid-template-columns: 1fr auto;
