@@ -1,3 +1,4 @@
+import { fetchTracks, fetchTrackAudioUrl } from "./api.js";
 import { getLocalFallbackPlayable, getLocalFallbackTracksResponse } from "./local-library.js";
 
 const USER_ID_KEY = "eva_music_user_id";
@@ -40,18 +41,7 @@ export function createWebPlatform(apiBase) {
       }
 
       try {
-        const response = await fetch(
-          `${apiBase}/tracks/me?user_id=${encodeURIComponent(userId)}`
-        );
-        if (!response.ok) {
-          return getLocalFallbackTracksResponse();
-        }
-
-        const tracks = (await response.json()).map((track) => ({
-          id: track.id,
-          title: track.title,
-          artist: track.artist ?? null,
-        }));
+        const tracks = await fetchTracks(userId);
 
         return {
           tracks: tracks.length > 0 ? tracks : getLocalFallbackTracksResponse().tracks,
@@ -66,19 +56,9 @@ export function createWebPlatform(apiBase) {
         return getLocalFallbackPlayable(trackId);
       }
 
-      const params = new URLSearchParams({ track_id: trackId });
-      if (userId) {
-        params.set("user_id", userId);
-      }
-
-      const response = await fetch(`${apiBase}/tracks/audio?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error("Не удалось получить ссылку на трек");
-      }
-
-      const data = await response.json();
+      const data = await fetchTrackAudioUrl(trackId, userId);
       return {
-        url: data.file_url,
+        url: data,
         kind: "http",
       };
     },

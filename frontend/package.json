@@ -1,0 +1,8 @@
+{
+  "name": "eva-player-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node api.test.js"
+  }
+}
