@@ -1,4 +1,16 @@
-export const API_BASE = "http://localhost:3001";
+const LOCAL_API_BASE = "http://localhost:3001";
+
+export function resolveApiBase(locationLike = globalThis.location) {
+  const origin = String(locationLike?.origin ?? "").trim();
+
+  if (origin.startsWith("http://") || origin.startsWith("https://")) {
+    return origin;
+  }
+
+  return LOCAL_API_BASE;
+}
+
+export const API_BASE = resolveApiBase();
 
 function buildUrl(path, params) {
   const url = new URL(path, API_BASE);

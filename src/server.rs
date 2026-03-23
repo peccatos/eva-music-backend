@@ -6,7 +6,7 @@ use axum::{
 use serde_json::{json, Value};
 use sqlx::{Pool, Sqlite};
 use std::error::Error;
-use tower_http::cors::CorsLayer;
+use tower_http::{cors::CorsLayer, services::ServeDir};
 
 const SCHEMA_SQL: &str = include_str!("../schema.sql");
 
@@ -44,6 +44,7 @@ fn build_router(state: AppCtx) -> Router {
         .route("/telegram/webhook", post(telegram::webhook::handler))
         .route("/tracks/me", get(telegram::webhook::get_tracks))
         .route("/tracks/audio", get(telegram::webhook::get_track_audio))
+        .fallback_service(ServeDir::new("frontend"))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -149,6 +150,37 @@ mod tests {
 
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.json::<Value>().await.unwrap(), json!({ "status": "ok" }));
+        }
+    }
+
+    #[tokio::test]
+    async fn frontend_static_assets_are_served() {
+        let pool = create_test_db().await;
+        let state = AppCtx {
+            db: pool,
+            telegram_bot_token: None,
+            telegram_api_base: "http://127.0.0.1:9999".to_string(),
+        };
+        let addr = spawn_app(build_router(state)).await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(format!("http://{addr}/player.html"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.text().await.unwrap();
+        assert!(body.contains(r#"src="./player.js""#));
+
+        for path in ["/player.js", "/api.js"] {
+            let response = client
+                .get(format!("http://{addr}{path}"))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK, "{path} should be served");
         }
     }
 

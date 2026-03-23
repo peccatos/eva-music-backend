@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use crate::app::AppCtx;
 use crate::db::repo::{get_track_by_id, get_tracks_by_user, insert_track};
 
+const PLAYER_WEBAPP_URL: &str = "https://ssmusicfront.onrender.com/player";
+
 #[derive(Debug, Deserialize)]
 pub struct Update {
     pub message: Option<Message>,
@@ -18,6 +20,7 @@ pub struct Update {
 #[derive(Debug, Deserialize)]
 pub struct Message {
     pub from: Option<User>,
+    pub text: Option<String>,
     pub audio: Option<Audio>,
     pub document: Option<Document>,
 }
@@ -64,7 +67,8 @@ pub async fn handler(
     Json(update): Json<Update>,
 ) -> Json<Value> {
     if let Some(msg) = update.message {
-        let user_id = msg.from.map(|u| u.id);
+        let chat_id = msg.from.as_ref().map(|u| u.id);
+        let user_id = chat_id;
 
         if let Some(audio) = msg.audio {
             if let Some(uid) = user_id {
@@ -93,9 +97,52 @@ pub async fn handler(
 
             return Json(json!({ "ok": true }));
         }
+
+        if let Some(text) = msg.text.as_deref() {
+            let command = text.trim();
+
+            if matches!(command, "/start" | "/player") {
+                if let Some(chat_id) = chat_id {
+                    let _ = send_webapp_button(chat_id, &ctx).await;
+                }
+            }
+        }
     }
 
     Json(json!({ "ok": true }))
+}
+
+async fn send_webapp_button(chat_id: i64, ctx: &AppCtx) -> Result<(), ()> {
+    let Some(token) = ctx.telegram_bot_token.as_deref() else {
+        return Err(());
+    };
+
+    let telegram_base = ctx.telegram_api_base.trim_end_matches('/');
+    let url = format!("{telegram_base}/bot{}/sendMessage", token);
+
+    let body = json!({
+        "chat_id": chat_id,
+        "text": "Открыть плеер",
+        "reply_markup": {
+            "keyboard": [[
+                {
+                    "text": "Слушай",
+                    "web_app": {
+                        "url": PLAYER_WEBAPP_URL
+                    }
+                }
+            ]],
+            "resize_keyboard": true
+        }
+    });
+
+    let _ = reqwest::Client::new()
+        .post(url)
+        .json(&body)
+        .send()
+        .await;
+
+    Ok(())
 }
 
 pub async fn get_tracks(
@@ -200,4 +247,145 @@ pub async fn get_track_audio(
             "file_url": file_url
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::db;
+    use axum::{
+        extract::State as AxumState,
+        routing::post,
+        Json as AxumJson,
+        Router,
+    };
+    use serde_json::Value;
+    use sqlx::{Pool, Sqlite};
+    use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+    use tokio::{net::TcpListener, sync::Mutex};
+    use uuid::Uuid;
+
+    async fn spawn_app(app: Router) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        tokio::task::yield_now().await;
+        addr
+    }
+
+    async fn create_test_db() -> Pool<Sqlite> {
+        let db_path = temp_db_path();
+        let database_url = format!(
+            "sqlite:///{}?mode=rwc",
+            db_path.to_string_lossy().replace('\\', "/")
+        );
+        let pool = db::init_db(&database_url).await;
+        sqlx::query(include_str!("../../schema.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    fn temp_db_path() -> PathBuf {
+        std::env::temp_dir().join(format!("eva-music-backend-webhook-test-{}.sqlite", Uuid::new_v4()))
+    }
+
+    async fn capture_send_message(
+        AxumState(captured): AxumState<Arc<Mutex<Option<Value>>>>,
+        AxumJson(body): AxumJson<Value>,
+    ) -> AxumJson<Value> {
+        *captured.lock().await = Some(body);
+        AxumJson(json!({ "ok": true }))
+    }
+
+    async fn spawn_send_message_mock(captured: Arc<Mutex<Option<Value>>>) -> SocketAddr {
+        let app = Router::new()
+            .route("/bottest-token/sendMessage", post(capture_send_message))
+            .with_state(captured);
+
+        spawn_app(app).await
+    }
+
+    #[tokio::test]
+    async fn start_and_player_commands_send_webapp_button() {
+        let captured = Arc::new(Mutex::new(None));
+        let telegram_addr = spawn_send_message_mock(captured.clone()).await;
+        let ctx = AppCtx {
+            db: create_test_db().await,
+            telegram_bot_token: Some("test-token".to_string()),
+            telegram_api_base: format!("http://{telegram_addr}"),
+        };
+
+        for command in ["/start", "/player"] {
+            let update = Update {
+                message: Some(Message {
+                    from: Some(User { id: 777 }),
+                    text: Some(command.to_string()),
+                    audio: None,
+                    document: None,
+                }),
+            };
+
+            let response = handler(State(ctx.clone()), Json(update)).await;
+            assert_eq!(response.0, json!({ "ok": true }));
+
+            let body = captured.lock().await.take().expect("expected sendMessage payload");
+            assert_eq!(body["chat_id"], 777);
+            assert_eq!(body["text"], "Открыть плеер");
+            assert_eq!(body["reply_markup"]["keyboard"][0][0]["text"], "Слушай");
+            assert_eq!(body["reply_markup"]["resize_keyboard"], true);
+            assert_eq!(
+                body["reply_markup"]["keyboard"][0][0]["web_app"]["url"],
+                PLAYER_WEBAPP_URL
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn handler_keeps_audio_and_document_ingestion_working() {
+        let pool = create_test_db().await;
+        let ctx = AppCtx {
+            db: pool.clone(),
+            telegram_bot_token: None,
+            telegram_api_base: "http://127.0.0.1:9999".to_string(),
+        };
+
+        let audio_update = Update {
+            message: Some(Message {
+                from: Some(User { id: 888 }),
+                text: None,
+                audio: Some(Audio {
+                    file_id: "audio-file-1".to_string(),
+                    file_name: Some("Song A".to_string()),
+                }),
+                document: None,
+            }),
+        };
+        let document_update = Update {
+            message: Some(Message {
+                from: Some(User { id: 888 }),
+                text: None,
+                audio: None,
+                document: Some(Document {
+                    file_id: "document-file-2".to_string(),
+                    file_name: Some("Doc B".to_string()),
+                }),
+            }),
+        };
+
+        let _ = handler(State(ctx.clone()), Json(audio_update)).await;
+        let _ = handler(State(ctx), Json(document_update)).await;
+
+        let tracks = get_tracks_by_user(&pool, 888).await;
+        assert_eq!(tracks.len(), 2);
+        let file_ids: Vec<_> = tracks.iter().map(|track| track.telegram_file_id.as_str()).collect();
+        assert!(file_ids.contains(&"audio-file-1"));
+        assert!(file_ids.contains(&"document-file-2"));
+    }
 }

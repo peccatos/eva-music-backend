@@ -15,3 +15,12 @@ services:
         value: sqlite:///var/data/tracks.db?mode=rwc
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+  - type: web
+    name: ssmusicfront
+    runtime: static
+    plan: free
+    staticPublishPath: ./deploy-frontend
+    routes:
+      - type: rewrite
+        source: /player
+        destination: /player.html

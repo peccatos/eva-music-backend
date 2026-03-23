@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fetchTracks, fetchTrackAudioUrl } from "./api.js";
+import { fetchTracks, fetchTrackAudioUrl, resolveApiBase } from "./api.js";
 
 const cases = [];
 
@@ -44,6 +44,16 @@ function hasRequiredMessage(error, token) {
     .replace(/\bis\b\s*/g, "")
     .includes(token);
 }
+
+test("resolveApiBase() prefers an HTTP(S) origin", async () => {
+  assert.equal(resolveApiBase({ origin: "https://example.test" }), "https://example.test");
+  assert.equal(resolveApiBase({ origin: "http://localhost:3001" }), "http://localhost:3001");
+});
+
+test("resolveApiBase() falls back to localhost for non-HTTP origins", async () => {
+  assert.equal(resolveApiBase({ origin: "null" }), "http://localhost:3001");
+  assert.equal(resolveApiBase({ origin: "" }), "http://localhost:3001");
+});
 
 test("fetchTracks() returns normalized array for array payload", async () => {
   mockFetchOnce([

@@ -3,7 +3,10 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
+#[cfg(windows)]
 const DEFAULT_DATABASE_URL: &str = "sqlite:///C:/dev/eva-music-backend/tracks.db?mode=rwc";
+#[cfg(not(windows))]
+const DEFAULT_DATABASE_URL: &str = "sqlite:///var/data/tracks.db?mode=rwc";
 const DEFAULT_PORT: u16 = 3001;
 const DEFAULT_TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 
