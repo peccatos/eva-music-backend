@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 
 use crate::app::AppCtx;
 use crate::db::repo::{get_track_by_id, get_tracks_by_user, insert_track};
+use crate::telegram::webapp::{error_response, resolve_trusted_telegram_user_id};
 
 const PLAYER_WEBAPP_URL: &str = "https://ssmusicfront.onrender.com/player";
 
@@ -150,11 +151,18 @@ pub async fn get_tracks(
     headers: HeaderMap,
     Query(q): Query<TracksQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let user_id = q.user_id.or_else(|| {
-        headers
-            .get("x-telegram-user-id")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<i64>().ok())
+    let trusted_user_id = match resolve_trusted_telegram_user_id(&headers, &ctx) {
+        Ok(user_id) => user_id,
+        Err(error) => return error_response(error),
+    };
+
+    let user_id = trusted_user_id.or_else(|| {
+        q.user_id.or_else(|| {
+            headers
+                .get("x-telegram-user-id")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<i64>().ok())
+        })
     });
 
     match user_id {
@@ -174,6 +182,7 @@ pub async fn get_tracks(
 
 pub async fn get_track_audio(
     State(ctx): State<AppCtx>,
+    headers: HeaderMap,
     Query(q): Query<TrackAudioQuery>,
 ) -> (StatusCode, Json<Value>) {
     let Some(track) = get_track_by_id(&ctx.db, &q.track_id).await else {
@@ -184,6 +193,23 @@ pub async fn get_track_audio(
             })),
         );
     };
+
+    let trusted_user_id = match resolve_trusted_telegram_user_id(&headers, &ctx) {
+        Ok(user_id) => user_id,
+        Err(error) => return error_response(error),
+    };
+
+    if let Some(user_id) = trusted_user_id {
+        if track.telegram_user_id != user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "forbidden",
+                    "code": "forbidden"
+                })),
+            );
+        }
+    }
 
     let Some(token) = ctx.telegram_bot_token.as_deref() else {
         return (
@@ -256,14 +282,17 @@ mod tests {
     use crate::db;
     use axum::{
         extract::State as AxumState,
-        routing::post,
+        routing::{get, post},
         Json as AxumJson,
         Router,
     };
+    use hmac::{Hmac, Mac};
     use serde_json::Value;
     use sqlx::{Pool, Sqlite};
+    use sha2::Sha256;
     use std::{net::SocketAddr, path::PathBuf, sync::Arc};
     use tokio::{net::TcpListener, sync::Mutex};
+    use urlencoding::encode;
     use uuid::Uuid;
 
     async fn spawn_app(app: Router) -> SocketAddr {
@@ -310,6 +339,70 @@ mod tests {
             .with_state(captured);
 
         spawn_app(app).await
+    }
+
+    async fn spawn_telegram_mock() -> SocketAddr {
+        let app = Router::new().fallback(get(|| async {
+            AxumJson(json!({
+                "result": {
+                    "file_path": "files/sample.mp3"
+                }
+            }))
+        }));
+
+        spawn_app(app).await
+    }
+
+    async fn seed_track(
+        pool: &Pool<Sqlite>,
+        id: &str,
+        telegram_user_id: i64,
+        telegram_file_id: &str,
+        title: Option<&str>,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO tracks (id, telegram_user_id, telegram_file_id, title, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind(id)
+        .bind(telegram_user_id)
+        .bind(telegram_file_id)
+        .bind(title)
+        .bind("2026-03-23T00:00:00Z")
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn sign_init_data(fields: &[(&str, &str)], bot_token: &str) -> String {
+        type HmacSha256 = Hmac<Sha256>;
+
+        let mut data_fields = fields
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>();
+        data_fields.sort();
+        let data_check_string = data_fields.join("\n");
+
+        let mut encoded_fields = fields
+            .iter()
+            .map(|(key, value)| format!("{}={}", encode(key), encode(value)))
+            .collect::<Vec<_>>();
+        encoded_fields.sort();
+
+        let mut mac = HmacSha256::new_from_slice(b"WebAppData").unwrap();
+        mac.update(bot_token.as_bytes());
+        let secret_key = mac.finalize().into_bytes();
+
+        let mut mac = HmacSha256::new_from_slice(&secret_key).unwrap();
+        mac.update(data_check_string.as_bytes());
+        let hash = hex::encode(mac.finalize().into_bytes());
+
+        let mut init_data = encoded_fields;
+        init_data.push(format!("hash={hash}"));
+        init_data.join("&")
     }
 
     #[tokio::test]
@@ -387,5 +480,59 @@ mod tests {
         let file_ids: Vec<_> = tracks.iter().map(|track| track.telegram_file_id.as_str()).collect();
         assert!(file_ids.contains(&"audio-file-1"));
         assert!(file_ids.contains(&"document-file-2"));
+    }
+
+    #[tokio::test]
+    async fn tracks_audio_requires_valid_telegram_context_when_present() {
+        let pool = create_test_db().await;
+        seed_track(
+            &pool,
+            "track-1",
+            1124976403,
+            "telegram-file-1",
+            Some("Song A"),
+        )
+        .await;
+
+        let telegram_addr = spawn_telegram_mock().await;
+        let telegram_api_base = format!("http://{telegram_addr}");
+        let ctx = AppCtx {
+            db: pool,
+            telegram_bot_token: Some("test-token".to_string()),
+            telegram_api_base,
+        };
+        let addr = spawn_app(axum::Router::new().route(
+            "/tracks/audio",
+            axum::routing::get(get_track_audio),
+        ).with_state(ctx)).await;
+
+        let valid_init_data = sign_init_data(
+            &[
+                ("auth_date", "1711234567"),
+                ("query_id", "AAHdFf12345"),
+                ("user", r#"{"id":1124976403,"first_name":"Test"}"#),
+            ],
+            "test-token",
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://{addr}/tracks/audio?track_id=track-1"))
+            .header("X-Telegram-Init-Data", valid_init_data)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let invalid_response = client
+            .get(format!("http://{addr}/tracks/audio?track_id=track-1"))
+            .header(
+                "X-Telegram-Init-Data",
+                "auth_date=1711234567&query_id=AAHdFf12345&user=%7B%22id%22%3A1124976403%7D&hash=deadbeef",
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(invalid_response.status(), StatusCode::UNAUTHORIZED);
     }
 }

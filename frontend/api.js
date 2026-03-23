@@ -1,4 +1,5 @@
 const LOCAL_API_BASE = "http://localhost:3001";
+const TELEGRAM_INIT_DATA_HEADER = "X-Telegram-Init-Data";
 
 export function resolveApiBase(locationLike = globalThis.location) {
   const origin = String(locationLike?.origin ?? "").trim();
@@ -26,12 +27,22 @@ function buildUrl(path, params) {
   return url.toString();
 }
 
-async function requestJson(path, params) {
+async function requestJson(path, { method = "GET", params, headers, body } = {}) {
+  const finalHeaders = {
+    Accept: "application/json",
+    ...(headers || {}),
+  };
+
+  let requestBody;
+  if (body !== undefined && body !== null) {
+    finalHeaders["Content-Type"] = "application/json";
+    requestBody = typeof body === "string" ? body : JSON.stringify(body);
+  }
+
   const response = await fetch(buildUrl(path, params), {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
+    method,
+    headers: finalHeaders,
+    body: requestBody,
   });
 
   if (!response.ok) {
@@ -101,6 +112,32 @@ function assertTracksResponse(data) {
   return list;
 }
 
+function assertBootstrapResponse(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("Invalid backend response from /auth/telegram: expected an object");
+  }
+
+  const telegramUserId = data.telegram_user_id ?? data.telegramUserId ?? "";
+  const tracks = Array.isArray(data.tracks)
+    ? data.tracks
+    : Array.isArray(data.library)
+      ? data.library
+      : null;
+
+  if (!String(telegramUserId).trim()) {
+    throw new Error("Invalid backend response from /auth/telegram: missing telegram_user_id");
+  }
+
+  if (!Array.isArray(tracks)) {
+    throw new Error("Invalid backend response from /auth/telegram: expected tracks array");
+  }
+
+  return {
+    telegramUserId: String(telegramUserId).trim(),
+    tracks,
+  };
+}
+
 function assertAudioResponse(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Invalid backend response from /tracks/audio: expected an object");
@@ -116,28 +153,90 @@ function assertAudioResponse(data) {
   return String(fileUrl).trim();
 }
 
-export async function fetchTracks(userId) {
-  requireNonEmptyString(userId, "userId");
-
-  const payload = await requestJson("/tracks/me", { user_id: userId });
-  const list = assertTracksResponse(payload);
+function normalizeTrackArray(list, endpointName) {
   const normalized = list.map(normalizeTrack).filter(Boolean);
 
   if (normalized.length !== list.length) {
-    throw new Error("Invalid backend response from /tracks/me: malformed track entries found");
+    throw new Error(`Invalid backend response from ${endpointName}: malformed track entries found`);
   }
 
   return normalized;
 }
 
-export async function fetchTrackAudioUrl(trackId, _userId) {
+function normalizeBootstrapResponse(data) {
+  const { telegramUserId, tracks } = assertBootstrapResponse(data);
+
+  return {
+    telegramUserId,
+    tracks: normalizeTrackArray(tracks, "/auth/telegram"),
+  };
+}
+
+export async function bootstrapTelegramSession(initDataRaw) {
+  const normalizedInitData = requireNonEmptyString(initDataRaw, "initDataRaw");
+
+  const payload = await requestJson("/auth/telegram", {
+    method: "POST",
+    body: {
+      init_data: normalizedInitData,
+    },
+  });
+
+  return normalizeBootstrapResponse(payload);
+}
+
+export async function fetchTracks(userId, authContext = {}) {
+  const initDataRaw =
+    typeof authContext === "object" && authContext
+      ? String(authContext.initDataRaw ?? "").trim()
+      : "";
+
+  let payload;
+  if (initDataRaw) {
+    payload = await requestJson("/tracks/me", {
+      headers: {
+        [TELEGRAM_INIT_DATA_HEADER]: initDataRaw,
+      },
+    });
+  } else {
+    requireNonEmptyString(userId, "userId");
+    payload = await requestJson("/tracks/me", {
+      params: {
+        user_id: userId,
+      },
+    });
+  }
+
+  const list = assertTracksResponse(payload);
+  return normalizeTrackArray(list, "/tracks/me");
+}
+
+export async function fetchTrackAudioUrl(trackId, authContext = {}) {
   requireNonEmptyString(trackId, "trackId");
 
+  const initDataRaw =
+    typeof authContext === "object" && authContext
+      ? String(authContext.initDataRaw ?? "").trim()
+      : "";
+
   const payload = await requestJson("/tracks/audio", {
-    track_id: trackId,
+    params: {
+      track_id: trackId,
+    },
+    headers: initDataRaw
+      ? {
+          [TELEGRAM_INIT_DATA_HEADER]: initDataRaw,
+        }
+      : undefined,
   });
 
   return assertAudioResponse(payload);
 }
 
-export { buildUrl, normalizeTrack, assertTracksResponse, assertAudioResponse };
+export {
+  buildUrl,
+  normalizeTrack,
+  assertTracksResponse,
+  assertBootstrapResponse,
+  assertAudioResponse,
+};

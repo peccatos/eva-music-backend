@@ -1,151 +1,71 @@
-# Eva player backend bundle
+# Eva player frontend bundle
 
-Внутри:
+`player.html` + `player.js` are the Telegram Mini App production entrypoint.
+`app.js` remains a browser/dev fallback.
 
-- `api.js` — единая точка подключения к backend
-- `app.js` — переписанный основной плеер
-- `player.js` — переписанный компактный плеер
+## Production flow
 
-## Что поменялось
+1. Telegram opens the Mini App and exposes `Telegram.WebApp.initData`.
+2. `player.js` sends raw `initData` to the backend with `POST /auth/telegram`.
+3. The backend validates the signature server-side and resolves `telegram_user_id`.
+4. The backend returns the authenticated user library.
+5. `player.js` renders a short loading state, then the library.
 
-1. Нормализованный backend-клиент живет в `api.js`.
-2. `app.js` и `player.js` используют только ESM-импорты и не знают о сетевом транспорте напрямую.
-3. `web-platform.js` использует `api.js` для backend-запросов и `local-library.js` для локального fallback.
-4. `platform.js` хранит локальный `API_BASE` только для сборки платформенного адаптера в dev-режиме.
+`initDataRaw` stays in memory for the session only. `localStorage` is not the production identity source.
 
-## Как подключить в HTML
+## Dev / browser mode
 
-```html
-<script type="module" src="./app.js"></script>
-```
+If the page is opened outside Telegram, `player.js` shows an explicit browser mode message instead of trying to infer identity.
 
-или для второго плеера:
+`app.js` can still be used for local/manual testing and keeps the legacy `userId` fallback behavior.
 
-```html
-<script type="module" src="./player.js"></script>
-```
+## API contract
 
-## Откуда берётся userId
+### `POST /auth/telegram`
 
-Приоритет такой:
-
-1. `Telegram.WebApp.initDataUnsafe.user.id`
-2. `localStorage.getItem("eva_music_user_id")`
-
-Если запускаешь не из Telegram, заранее положи `userId` в localStorage:
-
-```js
-localStorage.setItem("eva_music_user_id", "123456789");
-```
-
-## Ожидаемые backend endpoints
-
-### `GET /tracks/me?user_id=...`
-
-Ожидается массив треков или объект `{ "tracks": [] }`. Все схемы нормализуются только в `api.js`.
-
-Поддерживаемые поля:
-
-- `id` или `track_id`
-- `title` или `name`
-- `artist`, `author`, `creator`
-- `artworkUrl`, `artwork_url`, `cover_url`
-
-После нормализации UI получает только такой контракт:
-
-- `id`
-- `title`
-- `artist`
-- `artworkUrl`
-
-```json
-[
-  {
-    "id": "track_1",
-    "title": "Song A",
-    "artist": "Artist A",
-    "artworkUrl": "https://...",
-    "storeUrl": "https://..."
-  }
-]
-```
-
-### `GET /tracks/audio?track_id=...`
-
-Ожидается объект. Поддерживаются поля:
-
-- `file_url`
-- `audio_url`
-- `url`
-
-Для этого endpoint `user_id` больше не отправляется, так как backend использует только `track_id`.
-
-После нормализации `fetchTrackAudioUrl()` всегда возвращает непустую строку.
+Request:
 
 ```json
 {
-  "file_url": "https://..."
+  "init_data": "raw Telegram initData string"
 }
 ```
 
-## Поведение при ошибке backend
+Response:
 
-- Если `/tracks/me` вернул битую схему, `fetchTracks()` бросает явную ошибку с читаемым сообщением.
-- Если `/tracks/audio` вернул битую схему или пустой URL, `fetchTrackAudioUrl()` бросает явную ошибку.
-- `app.js` и `player.js` показывают пользовательский текст ошибки и не продолжают инициализацию через невалидные данные.
-- `web-platform.js` не парсит backend-ответы сам и опирается на `api.js` для нормализации.
+```json
+{
+  "telegram_user_id": 1124976403,
+  "tracks": [
+    {
+      "id": "track_1",
+      "title": "Song A",
+      "artist": null,
+      "artworkUrl": null
+    }
+  ]
+}
+```
 
-## API contract tests
+### `GET /tracks/me`
 
-Запуск:
+For compatibility, the endpoint still accepts `?user_id=...`.
+If the request includes `X-Telegram-Init-Data`, the backend validates it and resolves the user from Telegram instead.
+
+### `GET /tracks/audio`
+
+For compatibility, the endpoint still accepts `?track_id=...`.
+If the request includes `X-Telegram-Init-Data`, the backend validates it and only serves audio for the authenticated user.
+
+## Tests
 
 ```bash
 npm test
 ```
 
-Тесты проверяют только `api.js`, без браузера и без реальных запросов в backend. Они подтверждают:
+The tests cover:
 
-- нормализацию ответа `/tracks/me`;
-- поддержку fallback-полей;
-- явные ошибки на битый ответ `/tracks/me`;
-- поддержку `file_url`, `audio_url` и `url` для `/tracks/audio`;
-- явные ошибки на битый ответ `/tracks/audio`.
-
-## Player state machine
-
-`app.js` и `player.js` держат состояние через один объект и обновляют его только через явные события.
-
-### Состояния
-
-- `idle`
-- `loading_tracks`
-- `ready`
-- `resolving_audio`
-- `playing`
-- `paused`
-- `error`
-
-### Основные события
-
-- `INIT`
-- `TRACKS_LOAD_STARTED`
-- `TRACKS_LOAD_SUCCEEDED`
-- `TRACKS_LOAD_FAILED`
-- `TRACK_SELECTED`
-- `AUDIO_RESOLVE_STARTED`
-- `AUDIO_RESOLVE_SUCCEEDED`
-- `AUDIO_RESOLVE_FAILED`
-- `PLAY_REQUESTED`
-- `PAUSE_REQUESTED`
-- `AUDIO_STARTED`
-- `AUDIO_PAUSED`
-- `AUDIO_ENDED`
-- `RESET_ERROR`
-
-### Правила
-
-- Все переходы проходят через один reducer-like `transition()`.
-- Рендер читает только `state`, а не разрозненные флаги.
-- Асинхронные ответы проверяются по `requestToken`; устаревшие ответы игнорируются.
-- `error` всегда содержит человекочитаемое `errorMessage`.
-- UI и текст контролов всегда отражают текущий `state.status`.
+- Telegram bootstrap request handling;
+- `initData` transport to the backend;
+- audio URL resolution with the Telegram auth header;
+- legacy `userId` compatibility paths.

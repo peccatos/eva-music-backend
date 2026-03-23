@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { fetchTracks, fetchTrackAudioUrl, resolveApiBase } from "./api.js";
+import { createHmac } from "node:crypto";
+import {
+  bootstrapTelegramSession,
+  fetchTracks,
+  fetchTrackAudioUrl,
+  resolveApiBase,
+} from "./api.js";
 
 const cases = [];
 
@@ -43,6 +49,17 @@ function hasRequiredMessage(error, token) {
   return String(error?.message || "")
     .replace(/\bis\b\s*/g, "")
     .includes(token);
+}
+
+function signInitData(fields, botToken) {
+  const dataFields = fields.map(([key, value]) => `${key}=${value}`).sort();
+  const encodedFields = fields
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .sort();
+  const dataCheckString = dataFields.join("\n");
+  const secretKey = createHmac("sha256", "WebAppData").update(botToken).digest();
+  const hash = createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
+  return `${encodedFields.join("&")}&hash=${hash}`;
 }
 
 test("resolveApiBase() prefers an HTTP(S) origin", async () => {
@@ -165,6 +182,50 @@ test("fetchTracks() throws when userId is whitespace string", async () => {
   assert.equal(tracker.called, false);
 });
 
+test("fetchTracks() supports Telegram initData auth context", async () => {
+  const initDataRaw = signInitData(
+    [
+      ["auth_date", "1711234567"],
+      ["query_id", "AAHdFf12345"],
+      ["user", JSON.stringify({ id: 1124976403, first_name: "Test" })],
+    ],
+    "test-token"
+  );
+
+  let seenInit = null;
+  globalThis.fetch = async (input, init) => {
+    seenInit = { input: String(input), init };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      json: async () => ({
+        tracks: [
+          {
+            id: "track-1",
+            title: "Song A",
+          },
+        ],
+      }),
+    };
+  };
+
+  const tracks = await fetchTracks("", { initDataRaw });
+
+  assert.deepEqual(tracks, [
+    {
+      id: "track-1",
+      title: "Song A",
+      artist: "Исполнитель не указан",
+      artworkUrl: "",
+      storeUrl: "",
+    },
+  ]);
+  assert.equal(new URL(seenInit.input).pathname, "/tracks/me");
+  assert.equal(seenInit.init.headers["X-Telegram-Init-Data"], initDataRaw);
+  assert.equal(seenInit.init.body, undefined);
+});
+
 test("fetchTrackAudioUrl() accepts file_url", async () => {
   mockFetchOnce({ file_url: "https://example.com/file.mp3" });
 
@@ -189,6 +250,85 @@ test("fetchTrackAudioUrl() omits user_id query param", async () => {
   assert.equal(url.pathname, "/tracks/audio");
   assert.equal(url.searchParams.get("track_id"), "track-1");
   assert.equal(url.searchParams.has("user_id"), false);
+});
+
+test("fetchTrackAudioUrl() sends Telegram initData header when provided", async () => {
+  const initDataRaw = signInitData(
+    [
+      ["auth_date", "1711234567"],
+      ["query_id", "AAHdFf12345"],
+      ["user", JSON.stringify({ id: 1124976403, first_name: "Test" })],
+    ],
+    "test-token"
+  );
+
+  let seenInit = null;
+  globalThis.fetch = async (input, init) => {
+    seenInit = { input: String(input), init };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      json: async () => ({ file_url: "https://example.com/file.mp3" }),
+    };
+  };
+
+  assert.equal(
+    await fetchTrackAudioUrl("track-1", { initDataRaw }),
+    "https://example.com/file.mp3"
+  );
+
+  assert.equal(new URL(seenInit.input).pathname, "/tracks/audio");
+  assert.equal(seenInit.init.headers["X-Telegram-Init-Data"], initDataRaw);
+});
+
+test("bootstrapTelegramSession() posts init_data and normalizes tracks", async () => {
+  const initDataRaw = signInitData(
+    [
+      ["auth_date", "1711234567"],
+      ["query_id", "AAHdFf12345"],
+      ["user", JSON.stringify({ id: 1124976403, first_name: "Test" })],
+    ],
+    "test-token"
+  );
+
+  let seenInit = null;
+  globalThis.fetch = async (input, init) => {
+    seenInit = { input: String(input), init };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      json: async () => ({
+        telegram_user_id: 1124976403,
+        tracks: [
+          {
+            id: "track-1",
+            title: "Song A",
+          },
+        ],
+      }),
+    };
+  };
+
+  const session = await bootstrapTelegramSession(initDataRaw);
+
+  assert.deepEqual(session, {
+    telegramUserId: "1124976403",
+    tracks: [
+      {
+        id: "track-1",
+        title: "Song A",
+        artist: "Исполнитель не указан",
+        artworkUrl: "",
+        storeUrl: "",
+      },
+    ],
+  });
+  assert.equal(new URL(seenInit.input).pathname, "/auth/telegram");
+  assert.equal(seenInit.init.method, "POST");
+  assert.equal(seenInit.init.headers["Content-Type"], "application/json");
+  assert.equal(JSON.parse(seenInit.init.body).init_data, initDataRaw);
 });
 
 test("fetchTrackAudioUrl() accepts audio_url", async () => {

@@ -41,6 +41,7 @@ fn build_router(state: AppCtx) -> Router {
     Router::new()
         .route("/", get(health))
         .route("/health", get(health))
+        .route("/auth/telegram", post(telegram::webapp::bootstrap_telegram))
         .route("/telegram/webhook", post(telegram::webhook::handler))
         .route("/tracks/me", get(telegram::webhook::get_tracks))
         .route("/tracks/audio", get(telegram::webhook::get_track_audio))
@@ -66,6 +67,9 @@ mod tests {
     use sqlx::{Pool, Sqlite};
     use std::{net::SocketAddr, path::PathBuf};
     use tokio::net::TcpListener;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use urlencoding::encode;
     use uuid::Uuid;
 
     async fn spawn_app(app: Router) -> SocketAddr {
@@ -116,6 +120,36 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    fn sign_init_data(fields: &[(&str, &str)], bot_token: &str) -> String {
+        type HmacSha256 = Hmac<Sha256>;
+
+        let mut data_fields = fields
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>();
+        data_fields.sort();
+
+        let data_check_string = data_fields.join("\n");
+
+        let mut encoded_fields = fields
+            .iter()
+            .map(|(key, value)| format!("{}={}", encode(key), encode(value)))
+            .collect::<Vec<_>>();
+        encoded_fields.sort();
+
+        let mut mac = HmacSha256::new_from_slice(b"WebAppData").unwrap();
+        mac.update(bot_token.as_bytes());
+        let secret_key = mac.finalize().into_bytes();
+
+        let mut mac = HmacSha256::new_from_slice(&secret_key).unwrap();
+        mac.update(data_check_string.as_bytes());
+        let hash = hex::encode(mac.finalize().into_bytes());
+
+        let mut init_data = encoded_fields;
+        init_data.push(format!("hash={hash}"));
+        init_data.join("&")
     }
 
     async fn spawn_telegram_mock() -> SocketAddr {
@@ -171,6 +205,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.text().await.unwrap();
+        assert!(body.contains("telegram-web-app.js"));
         assert!(body.contains(r#"src="./player.js""#));
 
         for path in ["/player.js", "/api.js"] {
@@ -182,6 +217,50 @@ mod tests {
 
             assert_eq!(response.status(), StatusCode::OK, "{path} should be served");
         }
+    }
+
+    #[tokio::test]
+    async fn telegram_bootstrap_route_returns_tracks() {
+        let pool = create_test_db().await;
+        seed_track(
+            &pool,
+            "track-1",
+            1124976403,
+            "telegram-file-1",
+            Some("Song A"),
+        )
+        .await;
+
+        let state = AppCtx {
+            db: pool,
+            telegram_bot_token: Some("test-token".to_string()),
+            telegram_api_base: "http://127.0.0.1:9999".to_string(),
+        };
+        let addr = spawn_app(build_router(state)).await;
+        let init_data = sign_init_data(
+            &[
+                ("auth_date", "1711234567"),
+                ("query_id", "AAHdFf12345"),
+                ("user", r#"{"id":1124976403,"first_name":"Test","username":"tester"}"#),
+            ],
+            "test-token",
+        );
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/auth/telegram"))
+            .json(&json!({ "init_data": init_data }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.json::<Value>().await.unwrap();
+        assert_eq!(body["telegram_user_id"], 1124976403);
+        assert_eq!(body["tracks"].as_array().unwrap().len(), 1);
+        assert_eq!(body["tracks"][0]["id"], "track-1");
+        assert_eq!(body["tracks"][0]["title"], "Song A");
+        assert_eq!(body["tracks"][0]["artist"], Value::Null);
+        assert_eq!(body["tracks"][0]["artworkUrl"], Value::Null);
     }
 
     #[tokio::test]
