@@ -1,13 +1,17 @@
 services:
   - type: web
     name: eva-player
-    env: rust
-    plan: free
+    runtime: rust
+    plan: starter
     buildCommand: cargo build --release --locked
     startCommand: ./target/release/eva-music-backend
     healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: DATABASE_URL
-        sync: false
+        value: sqlite:///var/data/tracks.db?mode=rwc
       - key: TELEGRAM_BOT_TOKEN
         sync: false
