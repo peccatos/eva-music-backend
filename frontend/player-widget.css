@@ -1,0 +1,215 @@
+.eva-widget {
+  --eva-bg-top: #fffefb;
+  --eva-bg-bottom: #ece3d5;
+  --eva-hero: #1a120d;
+  --eva-sheet: rgba(250, 248, 243, 0.98);
+  --eva-line: rgba(255, 255, 255, 0.74);
+  --eva-text: #231914;
+  --eva-muted: #6d6258;
+  --eva-border: #ddd6ca;
+  --eva-shadow: 0 24px 60px rgba(47, 28, 15, 0.18);
+  box-sizing: border-box;
+  width: min(450px, 100%);
+  display: grid;
+  gap: 14px;
+  color: var(--eva-text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.eva-widget *,
+.eva-widget *::before,
+.eva-widget *::after {
+  box-sizing: border-box;
+}
+
+.eva-widget__hero {
+  position: relative;
+  border-radius: 124px 124px 88px 88px;
+  background:
+    radial-gradient(circle at top, var(--eva-bg-top) 0%, #f4efe5 36%, var(--eva-bg-bottom) 100%),
+    linear-gradient(180deg, #24160f 0%, var(--eva-hero) 100%);
+  padding: 10px;
+  box-shadow: var(--eva-shadow);
+}
+
+.eva-widget__label {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  width: 220px;
+  padding: 14px 16px 12px;
+  border-radius: 28px;
+  border: 1px dashed var(--eva-line);
+  background: rgba(188, 173, 152, 0.46);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  text-align: center;
+  z-index: 2;
+}
+
+.eva-widget__title {
+  font-size: 30px;
+  line-height: 1.05;
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+
+.eva-widget__artist {
+  margin: 0;
+  font-size: 18px;
+}
+
+.eva-widget__art {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 104px 104px 56px 56px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(20, 13, 9, 0.88) 0 18%, rgba(184, 164, 127, 0.96) 18% 100%);
+}
+
+.eva-widget__play,
+.eva-widget__nav button,
+.eva-widget__icon,
+.eva-widget__line,
+.eva-widget__track {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.eva-widget__play {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, -50%);
+  width: 98px;
+  height: 98px;
+  border-radius: 30px;
+  border: 1px dashed var(--eva-line);
+  background: rgba(72, 55, 41, 0.52);
+  color: #fff;
+  backdrop-filter: blur(10px);
+  font-size: 1.7rem;
+  z-index: 2;
+}
+
+.eva-widget.is-playing .eva-widget__play {
+  background: rgba(165, 149, 128, 0.72);
+}
+
+.eva-widget__nav {
+  position: absolute;
+  left: 50%;
+  bottom: 38px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 18px;
+  z-index: 2;
+}
+
+.eva-widget__nav button {
+  width: 84px;
+  height: 84px;
+  border-radius: 28px;
+  border: 1px dashed var(--eva-line);
+  background: rgba(72, 55, 41, 0.52);
+  color: #fff;
+  backdrop-filter: blur(10px);
+  font-size: 2rem;
+}
+
+.eva-widget__progress {
+  display: grid;
+  grid-template-columns: 48px 1fr 48px;
+  align-items: center;
+  gap: 10px;
+  color: var(--eva-muted);
+  font-size: 0.82rem;
+  padding: 0 4px;
+}
+
+.eva-widget__progress input {
+  width: 100%;
+  accent-color: #a28f7a;
+}
+
+.eva-widget__sheet {
+  background: var(--eva-sheet);
+  border: 1px solid var(--eva-border);
+  border-radius: 34px;
+  padding: 16px 12px 12px;
+  display: grid;
+  gap: 10px;
+  box-shadow: 0 16px 40px rgba(55, 39, 20, 0.08);
+}
+
+.eva-widget__group,
+.eva-widget__library {
+  display: grid;
+  gap: 10px;
+}
+
+.eva-widget__line,
+.eva-widget__icon,
+.eva-widget__track {
+  width: 100%;
+  background: #fff;
+  color: var(--eva-text);
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 1px rgba(34, 25, 18, 0.06);
+}
+
+.eva-widget__line {
+  padding: 16px;
+  text-align: left;
+}
+
+.eva-widget__line--ghost {
+  opacity: 0.9;
+}
+
+.eva-widget__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+.eva-widget__icon {
+  min-height: 56px;
+}
+
+.eva-widget__icon.is-active,
+.eva-widget__track.is-active {
+  background: #efe7db;
+  color: #5b4631;
+}
+
+.eva-widget__library-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--eva-muted);
+}
+
+.eva-widget__tracks {
+  display: grid;
+  gap: 8px;
+}
+
+.eva-widget__track {
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.eva-widget__debug {
+  padding: 12px 14px;
+  border: 1px solid var(--eva-border);
+  border-radius: 18px;
+  background: rgba(250, 248, 243, 0.98);
+  color: var(--eva-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.35;
+}

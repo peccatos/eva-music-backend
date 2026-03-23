@@ -31,15 +31,12 @@ pub struct User {
 pub struct Audio {
     pub file_id: String,
     pub file_name: Option<String>,
-    pub mime_type: Option<String>,
-    pub duration: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Document {
     pub file_id: String,
     pub file_name: Option<String>,
-    pub mime_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,7 +51,6 @@ pub struct TrackAudioQuery {
 
 #[derive(Debug, Deserialize)]
 struct TelegramGetFileResponse {
-    ok: bool,
     result: Option<TelegramFile>,
 }
 
