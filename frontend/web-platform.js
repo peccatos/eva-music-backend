@@ -56,7 +56,7 @@ export function createWebPlatform(apiBase) {
         return getLocalFallbackPlayable(trackId);
       }
 
-      const data = await fetchTrackAudioUrl(trackId, userId);
+      const data = await fetchTrackAudioUrl(trackId);
       return {
         url: data,
         kind: "http",

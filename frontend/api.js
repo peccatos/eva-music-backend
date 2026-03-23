@@ -118,12 +118,11 @@ export async function fetchTracks(userId) {
   return normalized;
 }
 
-export async function fetchTrackAudioUrl(trackId, userId) {
+export async function fetchTrackAudioUrl(trackId, _userId) {
   requireNonEmptyString(trackId, "trackId");
 
   const payload = await requestJson("/tracks/audio", {
     track_id: trackId,
-    user_id: userId,
   });
 
   return assertAudioResponse(payload);

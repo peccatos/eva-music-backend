@@ -70,13 +70,15 @@ localStorage.setItem("eva_music_user_id", "123456789");
 ]
 ```
 
-### `GET /tracks/audio?track_id=...&user_id=...`
+### `GET /tracks/audio?track_id=...`
 
 Ожидается объект. Поддерживаются поля:
 
 - `file_url`
 - `audio_url`
 - `url`
+
+Для этого endpoint `user_id` больше не отправляется, так как backend использует только `track_id`.
 
 После нормализации `fetchTrackAudioUrl()` всегда возвращает непустую строку.
 
@@ -108,3 +110,42 @@ npm test
 - явные ошибки на битый ответ `/tracks/me`;
 - поддержку `file_url`, `audio_url` и `url` для `/tracks/audio`;
 - явные ошибки на битый ответ `/tracks/audio`.
+
+## Player state machine
+
+`app.js` и `player.js` держат состояние через один объект и обновляют его только через явные события.
+
+### Состояния
+
+- `idle`
+- `loading_tracks`
+- `ready`
+- `resolving_audio`
+- `playing`
+- `paused`
+- `error`
+
+### Основные события
+
+- `INIT`
+- `TRACKS_LOAD_STARTED`
+- `TRACKS_LOAD_SUCCEEDED`
+- `TRACKS_LOAD_FAILED`
+- `TRACK_SELECTED`
+- `AUDIO_RESOLVE_STARTED`
+- `AUDIO_RESOLVE_SUCCEEDED`
+- `AUDIO_RESOLVE_FAILED`
+- `PLAY_REQUESTED`
+- `PAUSE_REQUESTED`
+- `AUDIO_STARTED`
+- `AUDIO_PAUSED`
+- `AUDIO_ENDED`
+- `RESET_ERROR`
+
+### Правила
+
+- Все переходы проходят через один reducer-like `transition()`.
+- Рендер читает только `state`, а не разрозненные флаги.
+- Асинхронные ответы проверяются по `requestToken`; устаревшие ответы игнорируются.
+- `error` всегда содержит человекочитаемое `errorMessage`.
+- UI и текст контролов всегда отражают текущий `state.status`.

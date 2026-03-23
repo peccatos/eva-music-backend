@@ -161,6 +161,26 @@ test("fetchTrackAudioUrl() accepts file_url", async () => {
   assert.equal(await fetchTrackAudioUrl("track-1", "user-1"), "https://example.com/file.mp3");
 });
 
+test("fetchTrackAudioUrl() omits user_id query param", async () => {
+  let seenUrl = "";
+  globalThis.fetch = async (input) => {
+    seenUrl = String(input);
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      json: async () => ({ file_url: "https://example.com/file.mp3" }),
+    };
+  };
+
+  await fetchTrackAudioUrl("track-1", "user-1");
+
+  const url = new URL(seenUrl);
+  assert.equal(url.pathname, "/tracks/audio");
+  assert.equal(url.searchParams.get("track_id"), "track-1");
+  assert.equal(url.searchParams.has("user_id"), false);
+});
+
 test("fetchTrackAudioUrl() accepts audio_url", async () => {
   mockFetchOnce({ audio_url: "https://example.com/audio.mp3" });
 

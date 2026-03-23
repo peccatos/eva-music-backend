@@ -147,8 +147,9 @@ pub async fn get_track_audio(
         );
     };
 
+    let telegram_base = ctx.telegram_api_base.trim_end_matches('/');
     let url = format!(
-        "https://api.telegram.org/bot{}/getFile?file_id={}",
+        "{telegram_base}/bot{}/getFile?file_id={}",
         token, track.telegram_file_id
     );
 
@@ -186,7 +187,7 @@ pub async fn get_track_audio(
     };
 
     let file_url = format!(
-        "https://api.telegram.org/file/bot{}/{}",
+        "{telegram_base}/file/bot{}/{}",
         token, file_path
     );
 

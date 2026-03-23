@@ -4,4 +4,5 @@ use sqlx::{Pool, Sqlite};
 pub struct AppCtx {
     pub db: Pool<Sqlite>,
     pub telegram_bot_token: Option<String>,
+    pub telegram_api_base: String,
 }

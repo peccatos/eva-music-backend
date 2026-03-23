@@ -4,13 +4,6 @@ const USER_ID_KEY = "eva_music_user_id";
 const telegram = window.Telegram?.WebApp ?? null;
 const telegramUserId = telegram?.initDataUnsafe?.user?.id?.toString() ?? "";
 
-const state = {
-  isPlaying: false,
-  userId: telegramUserId || localStorage.getItem(USER_ID_KEY) || "",
-  tracks: [],
-  trackIndex: 0,
-};
-
 const player = document.getElementById("player");
 const audio = document.getElementById("audio");
 const playToggle = document.getElementById("playToggle");
@@ -21,12 +14,148 @@ const trackStatus = document.getElementById("trackStatus");
 const trackTitle = document.getElementById("trackTitle");
 const trackArtist = document.getElementById("trackArtist");
 
+const state = {
+  status: "idle",
+  userId: telegramUserId || localStorage.getItem(USER_ID_KEY) || "",
+  tracks: [],
+  currentTrackId: null,
+  currentTrack: null,
+  audioUrl: null,
+  errorMessage: null,
+  requestToken: 0,
+  isAudioElementPlaying: false,
+};
+
 function currentTrack() {
-  return state.tracks[state.trackIndex] || null;
+  return state.currentTrack;
 }
 
 function isValidTrack(track) {
   return Boolean(track && typeof track === "object" && String(track.id || "").trim());
+}
+
+function transition(event, payload = {}) {
+  switch (event) {
+    case "INIT":
+      return { ...state };
+    case "TRACKS_LOAD_STARTED":
+      return {
+        ...state,
+        status: "loading_tracks",
+        errorMessage: null,
+        requestToken: payload.token,
+        isAudioElementPlaying: false,
+      };
+    case "TRACKS_LOAD_SUCCEEDED":
+      if (payload.token !== state.requestToken) return state;
+      return {
+        ...state,
+        status: payload.tracks.length > 0 ? "ready" : "idle",
+        tracks: payload.tracks,
+        currentTrackId: payload.tracks[0]?.id ? String(payload.tracks[0].id) : null,
+        currentTrack: payload.tracks[0] || null,
+        audioUrl: null,
+        errorMessage: null,
+        isAudioElementPlaying: false,
+      };
+    case "TRACKS_LOAD_FAILED":
+      if (payload.token !== state.requestToken) return state;
+      return {
+        ...state,
+        status: "error",
+        tracks: [],
+        currentTrackId: null,
+        currentTrack: null,
+        audioUrl: null,
+        errorMessage: payload.message || "Не удалось загрузить треки",
+        isAudioElementPlaying: false,
+      };
+    case "TRACK_SELECTED":
+      return {
+        ...state,
+        status: state.tracks.length > 0 ? "ready" : "idle",
+        currentTrackId: payload.track?.id ? String(payload.track.id) : null,
+        currentTrack: payload.track || null,
+        audioUrl: null,
+        errorMessage: null,
+        isAudioElementPlaying: false,
+      };
+    case "AUDIO_RESOLVE_STARTED":
+      return {
+        ...state,
+        status: "resolving_audio",
+        currentTrackId: payload.trackId ? String(payload.trackId) : state.currentTrackId,
+        currentTrack: payload.track || state.currentTrack,
+        audioUrl: null,
+        errorMessage: null,
+        requestToken: payload.token,
+        isAudioElementPlaying: false,
+      };
+    case "AUDIO_RESOLVE_SUCCEEDED":
+      if (payload.token !== state.requestToken) return state;
+      return {
+        ...state,
+        status: payload.autoplay ? "playing" : "paused",
+        currentTrackId: payload.trackId ? String(payload.trackId) : state.currentTrackId,
+        currentTrack: payload.track || state.currentTrack,
+        audioUrl: payload.audioUrl || null,
+        errorMessage: null,
+        isAudioElementPlaying: Boolean(payload.autoplay),
+      };
+    case "AUDIO_RESOLVE_FAILED":
+      if (payload.token !== state.requestToken) return state;
+      return {
+        ...state,
+        status: "error",
+        audioUrl: null,
+        errorMessage: payload.message || "Не удалось получить ссылку на аудио",
+        isAudioElementPlaying: false,
+      };
+    case "PLAY_REQUESTED":
+      if (!state.currentTrackId || !state.audioUrl) return state;
+      return {
+        ...state,
+        status: "playing",
+        errorMessage: null,
+      };
+    case "PAUSE_REQUESTED":
+      return {
+        ...state,
+        status: state.tracks.length > 0 ? "paused" : "idle",
+        isAudioElementPlaying: false,
+      };
+    case "AUDIO_STARTED":
+      return {
+        ...state,
+        status: state.currentTrackId && state.audioUrl ? "playing" : state.status,
+        isAudioElementPlaying: true,
+      };
+    case "AUDIO_PAUSED":
+      return {
+        ...state,
+        status: state.tracks.length > 0 ? "paused" : "idle",
+        isAudioElementPlaying: false,
+      };
+    case "AUDIO_ENDED":
+      return {
+        ...state,
+        status: state.tracks.length > 0 ? "paused" : "ready",
+        isAudioElementPlaying: false,
+      };
+    case "RESET_ERROR":
+      return {
+        ...state,
+        status: state.tracks.length > 0 ? "ready" : "idle",
+        errorMessage: null,
+      };
+    default:
+      return state;
+  }
+}
+
+function dispatch(event, payload = {}) {
+  Object.assign(state, transition(event, payload));
+  render();
 }
 
 function setSvgText(node, value) {
@@ -38,95 +167,167 @@ function setArtwork(url) {
   player.style.setProperty("--cover-image", `url("${url}")`);
 }
 
-function setPlaying(nextValue) {
-  state.isPlaying = nextValue;
-
-  if (player) {
-    player.classList.toggle("is-playing", state.isPlaying);
-  }
-
-  if (playToggle) {
-    playToggle.setAttribute("aria-pressed", String(state.isPlaying));
+function syncAudioSource() {
+  if (state.audioUrl && audio && audio.src !== state.audioUrl) {
+    audio.src = state.audioUrl;
+    audio.load();
   }
 }
 
-function setStatus(title, artist, status) {
-  setSvgText(trackTitle, title);
-  setSvgText(trackArtist, artist);
+function renderFallback(message, submessage, status) {
+  setSvgText(trackTitle, message);
+  setSvgText(trackArtist, submessage);
   setSvgText(trackStatus, status);
+  if (audio) {
+    audio.removeAttribute("src");
+    audio.load();
+  }
 }
 
 function renderTrack() {
   const track = currentTrack();
 
   if (!track) {
-    const message = state.userId ? "Треков нет" : "Нет userId";
-    const submessage = state.userId
-      ? "Backend вернул пустой список"
-      : "Сохрани eva_music_user_id в localStorage или открой из Telegram";
-    setStatus(message, submessage, "Ожидание данных");
-    audio.removeAttribute("src");
-    audio.load();
+    renderFallback(
+      state.userId ? "Треков нет" : "Нет userId",
+      state.userId ? "Backend вернул пустой список" : "Сохрани eva_music_user_id в localStorage или открой из Telegram",
+      "Ожидание данных"
+    );
     return;
   }
 
   if (!isValidTrack(track) || !String(track.title || "").trim()) {
-    setStatus(
+    renderFallback(
       "Некорректные данные",
       "Backend вернул трек без обязательных полей",
       "Невозможно продолжить"
     );
-    audio.removeAttribute("src");
-    audio.load();
     return;
   }
 
-  setStatus(track.title, track.artist || "Исполнитель не указан", track.status || "Готово к воспроизведению");
+  setSvgText(trackTitle, track.title);
+  setSvgText(trackArtist, track.artist || "Исполнитель не указан");
+  setSvgText(trackStatus, state.status === "resolving_audio" ? "Загрузка аудио..." : track.status || "Готово к воспроизведению");
   setArtwork(track.artworkUrl);
 }
 
-async function loadCurrentTrack(autoplay = false) {
-  const track = currentTrack();
-  if (!isValidTrack(track)) {
-    throw new Error("Invalid normalized track: missing id");
+function render() {
+  if (player) {
+    player.classList.toggle("is-playing", state.status === "playing");
   }
 
-  setStatus(track.title, track.artist || "Исполнитель не указан", "Загрузка аудио...");
-
-  const fileUrl = await fetchTrackAudioUrl(track.id, state.userId);
-  if (!String(fileUrl || "").trim()) {
-    throw new Error("Invalid audio URL returned by backend");
+  if (playToggle) {
+    playToggle.setAttribute("aria-pressed", String(state.status === "playing"));
   }
 
-  track.previewUrl = fileUrl;
-  track.status = autoplay ? "Воспроизведение" : "Готово к воспроизведению";
+  if (state.status === "error") {
+    renderFallback(
+      "Ошибка загрузки",
+      state.errorMessage || "Проверь backend",
+      "Ошибка"
+    );
+    return;
+  }
 
-  audio.src = fileUrl;
-  audio.load();
   renderTrack();
-
-  if (autoplay) {
-    const playPromise = audio.play();
-    setPlaying(true);
-    if (playPromise) {
-      await playPromise;
-    }
-  } else {
-    setPlaying(false);
-  }
+  syncAudioSource();
 }
 
-function restartTrack() {
-  audio.currentTime = 0;
-
-  if (state.isPlaying) {
+function setPlaybackDesired(isPlaying) {
+  if (!audio) return;
+  if (isPlaying) {
     const playPromise = audio.play();
     if (playPromise) {
-      playPromise.catch(() => {
-        setPlaying(false);
+      playPromise.catch((error) => {
+        console.error(error);
       });
     }
+    return;
   }
+
+  audio.pause();
+}
+
+function resolveCurrentTrack(autoplay = false) {
+  const track = currentTrack();
+  if (!isValidTrack(track)) {
+    return Promise.reject(new Error("Invalid normalized track: missing id"));
+  }
+
+  if (state.status === "resolving_audio") return Promise.resolve();
+
+  const token = state.requestToken + 1;
+  dispatch("AUDIO_RESOLVE_STARTED", {
+    token,
+    trackId: track.id,
+    track,
+    autoplay,
+  });
+
+  return fetchTrackAudioUrl(track.id)
+    .then((audioUrl) => {
+      if (token !== state.requestToken) return;
+      if (!String(audioUrl || "").trim()) {
+        throw new Error("Invalid audio URL returned by backend");
+      }
+
+      dispatch("AUDIO_RESOLVE_SUCCEEDED", {
+        token,
+        trackId: track.id,
+        track,
+        audioUrl,
+        autoplay,
+      });
+
+      if (autoplay) {
+        setPlaybackDesired(true);
+      }
+    })
+    .catch((error) => {
+      if (token !== state.requestToken) return;
+      dispatch("AUDIO_RESOLVE_FAILED", {
+        token,
+        message: error?.message || "Не удалось получить ссылку на аудио",
+      });
+    });
+}
+
+function stepTrack(direction) {
+  if (state.tracks.length <= 1) {
+    if (state.isAudioElementPlaying) {
+      audio.currentTime = 0;
+      setPlaybackDesired(true);
+    }
+    return;
+  }
+
+  const nextIndex = (state.tracks.findIndex((track) => String(track.id) === String(state.currentTrackId)) + direction + state.tracks.length) % state.tracks.length;
+  const nextTrack = state.tracks[nextIndex] || null;
+  if (!nextTrack?.id) return;
+
+  dispatch("TRACK_SELECTED", { track: nextTrack });
+  resolveCurrentTrack(true);
+}
+
+function playOrPause() {
+  if (state.status === "error") {
+    dispatch("RESET_ERROR");
+    return;
+  }
+
+  if (!audio.src) {
+    resolveCurrentTrack(true);
+    return;
+  }
+
+  if (state.status === "playing" || state.isAudioElementPlaying) {
+    dispatch("PAUSE_REQUESTED");
+    setPlaybackDesired(false);
+    return;
+  }
+
+  dispatch("PLAY_REQUESTED");
+  setPlaybackDesired(true);
 }
 
 function openTrackLink() {
@@ -135,67 +336,41 @@ function openTrackLink() {
   window.open(track.storeUrl, "_blank", "noopener,noreferrer");
 }
 
-function stepTrack(direction) {
-  if (state.tracks.length <= 1) {
-    restartTrack();
-    return;
-  }
-
-  state.trackIndex = (state.trackIndex + direction + state.tracks.length) % state.tracks.length;
-  loadCurrentTrack(true).catch(handleError);
-}
-
-function playOrPause() {
-  if (!audio.src) return;
-
-  if (state.isPlaying) {
-    audio.pause();
-    setPlaying(false);
-    return;
-  }
-
-  const playPromise = audio.play();
-  setPlaying(true);
-
-  if (playPromise) {
-    playPromise.catch(() => {
-      setPlaying(false);
-    });
-  }
-}
-
 async function initPlayer() {
   if (!state.userId) {
-    renderTrack();
+    dispatch("INIT");
     return;
   }
 
-  try {
-    setStatus("Загрузка", "Подключаем backend", "Инициализация...");
-    state.tracks = await fetchTracks(state.userId);
+  const token = state.requestToken + 1;
+  dispatch("TRACKS_LOAD_STARTED", { token });
 
-    if (state.tracks.some((track) => !isValidTrack(track))) {
+  try {
+    const tracks = await fetchTracks(state.userId);
+    if (token !== state.requestToken) return;
+    if (tracks.some((track) => !isValidTrack(track))) {
       throw new Error("Invalid normalized track: missing id");
     }
 
-    state.trackIndex = 0;
-    renderTrack();
-
-    if (state.tracks.length > 0) {
-      await loadCurrentTrack(false);
+    dispatch("TRACKS_LOAD_SUCCEEDED", { token, tracks });
+    if (tracks.length > 0) {
+      await resolveCurrentTrack(false);
     }
   } catch (error) {
-    state.tracks = [];
-    state.trackIndex = 0;
-    renderTrack();
-    throw error;
+    if (token !== state.requestToken) return;
+    dispatch("TRACKS_LOAD_FAILED", {
+      token,
+      message: error?.message || "Проверь backend",
+    });
   }
 }
 
 function handleError(error) {
   console.error(error);
-  setPlaying(false);
-  setStatus("Ошибка загрузки", error?.message || "Проверь backend", "Ошибка");
+  dispatch("AUDIO_RESOLVE_FAILED", {
+    token: state.requestToken,
+    message: error?.message || "Проверь backend",
+  });
 }
 
 if (playToggle) playToggle.addEventListener("click", playOrPause);
@@ -204,17 +379,15 @@ if (nextBtn) nextBtn.addEventListener("click", () => stepTrack(1));
 if (playlistBtn) playlistBtn.addEventListener("click", openTrackLink);
 
 audio.addEventListener("ended", () => {
-  setPlaying(false);
+  dispatch("AUDIO_ENDED");
 });
 
 audio.addEventListener("pause", () => {
-  if (audio.currentTime !== 0) {
-    setPlaying(false);
-  }
+  dispatch("AUDIO_PAUSED");
 });
 
 audio.addEventListener("play", () => {
-  setPlaying(true);
+  dispatch("AUDIO_STARTED");
 });
 
 if (telegram) {
@@ -222,4 +395,5 @@ if (telegram) {
   telegram.expand();
 }
 
+dispatch("INIT");
 initPlayer().catch(handleError);

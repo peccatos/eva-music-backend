@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: eva-player
+    env: rust
+    plan: free
+    buildCommand: cargo build --release --locked
+    startCommand: ./target/release/eva-music-backend
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
