@@ -81,15 +81,11 @@ fn library_resolve_track_url(
 ) -> Result<PlayableResponse, String> {
     let _ = user_id;
 
-    let tracks = load_tracks(&app)?;
-    let _track = tracks
-        .into_iter()
-        .find(|track| track.id == track_id)
-        .ok_or_else(|| format!("track not found: {track_id}"))?;
+    let track_path = resolve_track_path(&app, &track_id)?;
 
     Ok(PlayableResponse {
-        url: public_asset_url(Path::new(&track_id)),
-        kind: "asset",
+        url: track_path.display().to_string(),
+        kind: "file",
     })
 }
 
@@ -135,6 +131,30 @@ fn load_tracks(app: &AppHandle) -> Result<Vec<DesktopTrack>, String> {
 
     tracks.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(tracks)
+}
+
+fn resolve_track_path(app: &AppHandle, track_id: &str) -> Result<PathBuf, String> {
+    let music_dir = resolve_music_dir(app)?;
+
+    for entry in fs::read_dir(&music_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+
+        if !is_supported_audio_file(&path) {
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+
+        if file_name.eq_ignore_ascii_case(track_id) {
+            return path.canonicalize().map_err(|error| error.to_string());
+        }
+    }
+
+    Err(format!("track not found: {track_id}"))
 }
 
 fn resolve_music_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -202,12 +222,4 @@ fn split_artist_and_title(value: &str) -> (Option<String>, String) {
     }
 
     (None, value.to_string())
-}
-
-fn public_asset_url(path: &Path) -> String {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    format!("/{}", urlencoding::encode(file_name))
 }

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { createBridgePlatform } from "./bridge-platform.js";
 import { getLocalFallbackPlayable, getLocalFallbackTracksResponse } from "./local-library.js";
 
@@ -37,6 +37,15 @@ export function createTauriPlatform() {
   return createBridgePlatform({
     mode: "tauri",
     bridge: createTauriBridge(),
-    normalizePlayable: (value) => value,
+    normalizePlayable: (value) => {
+      if (value?.kind === "file") {
+        return {
+          ...value,
+          url: convertFileSrc(value.url),
+        };
+      }
+
+      return value;
+    },
   });
 }
